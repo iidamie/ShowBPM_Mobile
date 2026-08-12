@@ -1,0 +1,8 @@
+*.cs text diff
+*.csproj text diff
+*.md text diff
+*.yml text diff
+*.yaml text diff
+*.py text diff
+*.bat text diff
+VERSION.txt text diff

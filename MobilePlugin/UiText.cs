@@ -1,0 +1,112 @@
+namespace ShowBPM.Mobile;
+
+internal sealed record UiText(
+    string TileToggle,
+    string TileTemplate,
+    string RealToggle,
+    string RealTemplate,
+    string KpsToggle,
+    string KpsTemplate,
+    string Appearance,
+    string Shadow,
+    string Bold,
+    string ZeroPadding,
+    string IgnoreMultipress,
+    string DecimalPlaces,
+    string PositionX,
+    string PositionY,
+    string FontSize,
+    string Alignment,
+    string Left,
+    string Center,
+    string Right,
+    string SpeedTextToggle,
+    string SpeedTextBasis,
+    string SpeedTextOnTile,
+    string SpeedTextOnReal)
+{
+    internal static readonly UiText English = new(
+        "Show Tile BPM",
+        "Tile BPM text",
+        "Show Real BPM",
+        "Real BPM text",
+        "Show KPS",
+        "KPS text",
+        "Appearance",
+        "Shadow",
+        "Bold",
+        "Zero placeholders",
+        "Ignore multipress",
+        "Decimal places",
+        "Horizontal position",
+        "Vertical position",
+        "Font size",
+        "Alignment",
+        "Left",
+        "Center",
+        "Right",
+        "Display speed as text",
+        "Speed text basis",
+        "Based on Tile BPM",
+        "Based on Real BPM");
+
+    internal static readonly UiText Chinese = new(
+        "显示轨道 BPM",
+        "轨道 BPM 文本",
+        "显示体感 BPM",
+        "体感 BPM 文本",
+        "显示 KPS",
+        "KPS 文本",
+        "外观",
+        "阴影",
+        "粗体",
+        "补齐小数位",
+        "忽略同打",
+        "小数位数",
+        "水平位置",
+        "垂直位置",
+        "字号",
+        "对齐",
+        "左对齐",
+        "居中",
+        "右对齐",
+        "显示速度倍率文字",
+        "倍率基准",
+        "基于轨道 BPM",
+        "基于体感 BPM");
+
+    internal static readonly UiText Korean = new(
+        "타일 BPM 띄우기",
+        "타일 BPM 글자",
+        "체감 BPM 띄우기",
+        "체감 BPM 글자",
+        "초당 클릭 띄우기",
+        "초당 클릭 글자",
+        "모양",
+        "글자 그림자",
+        "글자 굵게",
+        "소수점을 0으로 채우기",
+        "체감 BPM에서 동타 무시하기",
+        "소수점 표시 자리수",
+        "글자 x 위치",
+        "글자 y 위치",
+        "글자 크기",
+        "글자 정렬",
+        "왼쪽",
+        "가운데",
+        "오른쪽",
+        "속도를 텍스트로 표시",
+        "속도 표시 기준",
+        "타일 BPM 기준",
+        "체감 BPM 기준");
+
+    internal static UiText FromSystemLanguage(int language)
+    {
+        return language switch
+        {
+            6 or 40 or 41 => Chinese,
+            23 => Korean,
+            _ => English,
+        };
+    }
+}

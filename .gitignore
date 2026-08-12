@@ -1,0 +1,33 @@
+# Build output
+**/bin/
+**/obj/
+artifacts/
+tmp_package/
+
+# Local game project and game assemblies
+Assets/
+Packages/
+ProjectSettings/
+build/
+
+# Compile-time references are prepared by the release workflow
+References/*.dll
+References/*.xml
+
+# Locally packaged mod binaries and diagnostics
+ShowBPM.dll
+ShowBPM-*.zip
+logcat-output*.txt
+manager*.log
+__pycache__/
+
+# IDE and OS files
+.idea/
+.vs/
+.vscode/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+.DS_Store
+Thumbs.db
