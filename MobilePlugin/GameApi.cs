@@ -25,6 +25,7 @@ internal sealed unsafe class GameApi
     private readonly IRuntimeClass? _levelDataClass;
     private readonly IRuntimeClass? _gcsClass;
     private readonly IRuntimeClass? _rdConstantsClass;
+    private readonly IRuntimeClass? _gameObjectClass;
 
     private readonly IRuntimeField? _controllerInstance;
     private readonly IRuntimeField? _gameWorld;
@@ -94,20 +95,13 @@ internal sealed unsafe class GameApi
     private readonly nint _setBehaviourEnabledMethodInfo;
     private readonly GetBooleanDelegate? _getRendererVisible;
     private readonly nint _getRendererVisibleMethodInfo;
-    private readonly InstantiateAtDelegate? _instantiateAt;
-    private readonly nint _instantiateAtMethodInfo;
-    private readonly InstantiateWithParentDelegate? _instantiateWithParent;
-    private readonly nint _instantiateWithParentMethodInfo;
+    private readonly IRuntimeMethod? _instantiateWithParent;
     private readonly GetComponentByNameDelegate? _getComponentByName;
     private readonly nint _getComponentByNameMethodInfo;
     private readonly GetComponentByTypeDelegate? _getComponentByType;
     private readonly nint _getComponentByTypeMethodInfo;
     private readonly GetObjectDelegate? _getComponentTransform;
     private readonly nint _getComponentTransformMethodInfo;
-    private readonly GetVector3Delegate? _getTransformPosition;
-    private readonly nint _getTransformPositionMethodInfo;
-    private readonly GetQuaternionDelegate? _getTransformRotation;
-    private readonly nint _getTransformRotationMethodInfo;
     private readonly DestroyObjectDelegate? _destroyObject;
     private readonly nint _destroyObjectMethodInfo;
     private readonly Dictionary<nint, CreatedSpeedText> _createdSpeedTexts = new();
@@ -195,7 +189,7 @@ internal sealed unsafe class GameApi
         IRuntimeClass? behaviourClass = FindClassInDomain("UnityEngine", "Behaviour");
         IRuntimeClass? rendererClass = FindClassInDomain("UnityEngine", "Renderer");
         IRuntimeClass? objectClass = FindClassInDomain("UnityEngine", "Object");
-        IRuntimeClass? transformClass = FindClassInDomain("UnityEngine", "Transform");
+        _gameObjectClass = gameObjectClass;
         _textValue = FindField(textClass, "m_Text");
 
         _setText = Bind<SetStringDelegate>(textClass, "set_text",
@@ -212,12 +206,8 @@ internal sealed unsafe class GameApi
             new[] { "System.Boolean" }, out _setBehaviourEnabledMethodInfo);
         _getRendererVisible = Bind<GetBooleanDelegate>(rendererClass, "get_isVisible",
             Array.Empty<string>(), out _getRendererVisibleMethodInfo);
-        _instantiateAt = Bind<InstantiateAtDelegate>(objectClass, "Instantiate",
-            new[] { "UnityEngine.Object", "UnityEngine.Vector3", "UnityEngine.Quaternion" },
-            out _instantiateAtMethodInfo);
-        _instantiateWithParent = Bind<InstantiateWithParentDelegate>(objectClass, "Instantiate",
-            new[] { "UnityEngine.Object", "UnityEngine.Transform" },
-            out _instantiateWithParentMethodInfo);
+        _instantiateWithParent = objectClass?.GetMethod("Instantiate",
+            "UnityEngine.Object", "UnityEngine.Transform");
         _getComponentByName = Bind<GetComponentByNameDelegate>(gameObjectClass, "GetComponent",
             new[] { "System.String" }, out _getComponentByNameMethodInfo)
             ?? Bind<GetComponentByNameDelegate>(gameObjectClass, "GetComponent",
@@ -228,10 +218,6 @@ internal sealed unsafe class GameApi
                 new[] { "Type" }, out _getComponentByTypeMethodInfo);
         _getComponentTransform = Bind<GetObjectDelegate>(componentClass, "get_transform",
             Array.Empty<string>(), out _getComponentTransformMethodInfo);
-        _getTransformPosition = Bind<GetVector3Delegate>(transformClass, "get_position",
-            Array.Empty<string>(), out _getTransformPositionMethodInfo);
-        _getTransformRotation = Bind<GetQuaternionDelegate>(transformClass, "get_rotation",
-            Array.Empty<string>(), out _getTransformRotationMethodInfo);
         _destroyObject = Bind<DestroyObjectDelegate>(objectClass, "Destroy",
             new[] { "UnityEngine.Object" }, out _destroyObjectMethodInfo);
     }
@@ -242,8 +228,7 @@ internal sealed unsafe class GameApi
         && _letterPressClass != null
         && (_getComponentByName != null || _getComponentByType != null)
         && _getComponentTransform != null
-        && ((_instantiateAt != null && _getTransformPosition != null && _getTransformRotation != null)
-            || _instantiateWithParent != null);
+        && _instantiateWithParent != null;
 
     /// <summary>速度倍率文字需要的所有运行时句柄都解析成功时为真。</summary>
     internal bool SupportsSpeedText =>
@@ -266,11 +251,10 @@ internal sealed unsafe class GameApi
             + $"floorSpeed={Present(_floorSpeed)}, prevFloor={Present(_prevFloor)}, "
             + $"editorNumText={Present(_editorNumText)}, letterText={Present(_letterText)}, "
             + $"getGameConstants={Present(_getGameConstants)}, prefabLetterPress={Present(_prefabLetterPress)}, "
-            + $"instantiateAt={Present(_instantiateAt)}, instantiateWithParent={Present(_instantiateWithParent)}, "
+            + $"instantiateWithParent={Present(_instantiateWithParent)}, "
             + $"getComponentByName={Present(_getComponentByName)}, getComponentByType={Present(_getComponentByType)}, "
             + $"letterPressClass={Present(_letterPressClass)}, "
-            + $"getTransform={Present(_getComponentTransform)}, getPosition={Present(_getTransformPosition)}, "
-            + $"getRotation={Present(_getTransformRotation)}, destroy={Present(_destroyObject)}, "
+            + $"getTransform={Present(_getComponentTransform)}, destroy={Present(_destroyObject)}, "
             + $"textValue={Present(_textValue)}, setText={Present(_setText)}, "
             + $"setColor={Present(_setGraphicColor)}, getColor={Present(_getGraphicColor)}, "
             + $"setActive={Present(_setGameObjectActive)}, getGameObject={Present(_getComponentGameObject)}, "
@@ -544,44 +528,49 @@ internal sealed unsafe class GameApi
             return false;
         }
 
-        nint gameObject = 0;
-        if (_instantiateAt != null && _getTransformPosition != null && _getTransformRotation != null)
+        nint clone;
+        try
         {
-            try
-            {
-                NativeVector3 position = _getTransformPosition(floorTransform, _getTransformPositionMethodInfo);
-                NativeQuaternion rotation = _getTransformRotation(floorTransform, _getTransformRotationMethodInfo);
-                gameObject = _instantiateAt(prefab, position, rotation, _instantiateAtMethodInfo);
-            }
-            catch
-            {
-                // Fall back to the parent overload below when this Unity build strips
-                // the position/rotation overload or rejects its runtime signature.
-            }
+            // RuntimeInvoke marshals Unity value/reference types correctly. Calling the
+            // position/rotation overload through a raw delegate corrupted Unity state on
+            // ARM64 during scene reconstruction.
+            clone = _instantiateWithParent!.InvokeStatic(new[] { prefab, floorTransform });
         }
-
-        if (gameObject == 0 && _instantiateWithParent != null)
+        catch (Exception exception)
         {
-            try
-            {
-                gameObject = _instantiateWithParent(prefab, floorTransform, _instantiateWithParentMethodInfo);
-            }
-            catch
-            {
-            }
-        }
-
-        if (gameObject == 0)
-        {
-            LogTextCreationFailure("all prefab Instantiate overloads returned null or threw");
+            LogTextCreationFailure($"Instantiate(Object, Transform) threw: {exception.Message}");
             return false;
         }
 
-        nint letterPress = GetComponentByName(gameObject, "scrLetterPress");
-        nint labelText = letterPress == 0 ? 0 : Read(_letterText, letterPress, nint.Zero);
-        if (labelText == 0)
+        if (clone == 0)
         {
-            DestroyObject(gameObject);
+            LogTextCreationFailure("Instantiate(Object, Transform) returned null");
+            return false;
+        }
+
+        nint gameObject;
+        nint letterPress;
+        if (IsInstanceOf(clone, _letterPressClass))
+        {
+            letterPress = clone;
+            gameObject = GetGameObject(letterPress);
+        }
+        else if (IsInstanceOf(clone, _gameObjectClass))
+        {
+            gameObject = clone;
+            letterPress = GetComponentByName(gameObject, "scrLetterPress");
+        }
+        else
+        {
+            DestroyObject(clone);
+            LogTextCreationFailure("instantiated prefab is neither scrLetterPress nor GameObject");
+            return false;
+        }
+
+        nint labelText = letterPress == 0 ? 0 : Read(_letterText, letterPress, nint.Zero);
+        if (gameObject == 0 || labelText == 0)
+        {
+            DestroyObject(clone);
             LogTextCreationFailure("instantiated prefab has no scrLetterPress.letterText");
             return false;
         }
@@ -602,6 +591,12 @@ internal sealed unsafe class GameApi
             DestroyObject(created.GameObject);
         _createdSpeedTexts.Clear();
     }
+
+    /// <summary>
+    /// 场景重建时 Unity 会自行销毁作为砖块子对象的标签。这里只清空旧指针，不能在
+    /// 控制器 Awake 的对象构造阶段再次调用 Destroy。
+    /// </summary>
+    internal void ForgetCreatedSpeedTexts() => _createdSpeedTexts.Clear();
 
     /// <summary>砖块的主渲染器或旧版精灵渲染器任意一个可见即为真。</summary>
     internal bool IsFloorVisible(nint floor)
@@ -848,6 +843,30 @@ internal sealed unsafe class GameApi
         }
 
         return 0;
+    }
+
+    private static bool IsInstanceOf(nint instance, IRuntimeClass? expectedClass)
+    {
+        if (instance == 0 || expectedClass == null)
+            return false;
+
+        try
+        {
+            if (RuntimeManager.IsIl2Cpp)
+            {
+                nint actualClass = Il2CppFunctions.il2cpp_object_get_class(instance);
+                return actualClass != 0
+                    && Il2CppFunctions.il2cpp_class_is_assignable_from(expectedClass.Ptr, actualClass);
+            }
+
+            // The mobile target uses IL2CPP. Keeping the exact-class fallback prevents
+            // Mono builds from passing an arbitrary pointer to GameObject.GetComponent.
+            return RuntimeManager.IsMono && MonoFunctions.MonoObjectGetClass(instance) == expectedClass.Ptr;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private void DestroyObject(nint gameObject)
@@ -1097,23 +1116,10 @@ internal sealed unsafe class GameApi
     private delegate nint GetObjectDelegate(nint instance, nint methodInfo);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate nint InstantiateAtDelegate(
-        nint original, NativeVector3 position, NativeQuaternion rotation, nint methodInfo);
-
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate nint InstantiateWithParentDelegate(nint original, nint parent, nint methodInfo);
-
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate nint GetComponentByNameDelegate(nint instance, nint typeName, nint methodInfo);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate nint GetComponentByTypeDelegate(nint instance, nint typeObject, nint methodInfo);
-
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate NativeVector3 GetVector3Delegate(nint instance, nint methodInfo);
-
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate NativeQuaternion GetQuaternionDelegate(nint instance, nint methodInfo);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void DestroyObjectDelegate(nint instance, nint methodInfo);
@@ -1132,21 +1138,4 @@ internal readonly struct NativeColor(float r, float g, float b, float a)
     internal readonly float G = g;
     internal readonly float B = b;
     internal readonly float A = a;
-}
-
-[StructLayout(LayoutKind.Sequential)]
-internal readonly struct NativeVector3(float x, float y, float z)
-{
-    internal readonly float X = x;
-    internal readonly float Y = y;
-    internal readonly float Z = z;
-}
-
-[StructLayout(LayoutKind.Sequential)]
-internal readonly struct NativeQuaternion(float x, float y, float z, float w)
-{
-    internal readonly float X = x;
-    internal readonly float Y = y;
-    internal readonly float Z = z;
-    internal readonly float W = w;
 }

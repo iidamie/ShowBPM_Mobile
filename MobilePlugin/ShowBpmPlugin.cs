@@ -57,6 +57,8 @@ public sealed class ShowBpmPlugin : IModPlugin, IModSettings
     private bool _speedTextRetryAttempted;
     private bool _speedTextDrawDiagnosticLogged;
     private bool _speedTextVisibilityDiagnosticLogged;
+    private volatile bool _speedTextLevelReady;
+    private nint _speedTextFloorList;
 
     [ModSettingLabel("Show tile BPM")]
     public bool ShowTileBpm = true;
@@ -180,6 +182,7 @@ public sealed class ShowBpmPlugin : IModPlugin, IModSettings
         _speedTextRetryAttempted = false;
         _speedTextDrawDiagnosticLogged = false;
         _speedTextVisibilityDiagnosticLogged = false;
+        _speedTextLevelReady = false;
         Logger.Info(LogTag, "Unloaded");
     }
 
@@ -249,9 +252,27 @@ public sealed class ShowBpmPlugin : IModPlugin, IModSettings
 
     internal void HandleControllerAwake(nint controller)
     {
+        // The old scene owns these child objects and will destroy them during the
+        // transition. Do not call UnityEngine.Object.Destroy from Awake while the
+        // replacement scene is still constructing its object graph.
+        _game?.ForgetCreatedSpeedTexts();
         _controller = controller;
         _languageCode = _game?.GetLanguageCode() ?? 10;
-        HideHud();
+        lock (_stateLock)
+        {
+            _beforeMultipress = false;
+            _beforeBpm = 0d;
+            _baseBpm = 0d;
+            _tileBpm = 0d;
+            _realBpm = 0d;
+            _kps = 0;
+            _hudVisible = false;
+        }
+        _speedTextFloorList = 0;
+        _speedTextApplied = false;
+        _speedTextRefreshPending = false;
+        _speedTextRetryAttempted = false;
+        _speedTextLevelReady = false;
     }
 
     internal void HandleLanguageChanged(int language)
@@ -264,10 +285,6 @@ public sealed class ShowBpmPlugin : IModPlugin, IModSettings
         GameApi? game = _game;
         if (game == null)
             return;
-
-        // Floor instances are replaced on restart/level load; remove labels attached
-        // to the previous instances before creating labels for the new list.
-        game.ClearCreatedSpeedTexts();
 
         Logger.Debug(LogTag, $"Level start probe: floorArg={Pointer(floor)}, controllerBefore={Pointer(_controller)}");
         nint controller = game.GetController(floor);
@@ -289,6 +306,15 @@ public sealed class ShowBpmPlugin : IModPlugin, IModSettings
             return;
         }
 
+        nint floorList = game.GetLevelFloors();
+        if (floorList != 0 && floorList != _speedTextFloorList)
+        {
+            // A second level can reuse the same controller. The old labels are
+            // already scene-owned; only discard their managed pointers here.
+            game.ForgetCreatedSpeedTexts();
+            _speedTextFloorList = floorList;
+        }
+
         // 优先用 scnGame 的 LevelData.pitch × 速度试炼倍速，取不到时回退到 conductor.song.pitch。
         // 前者才会随速度试炼变化，只读后者会导致开启速度试炼后 BPM 偏低。
         double pitch = game.GetScenePitch();
@@ -304,7 +330,7 @@ public sealed class ShowBpmPlugin : IModPlugin, IModSettings
             return;
         }
 
-        double speed = game.GetCurrentSequenceId(controller) == 0 ? 1d : game.GetSpeed(controller);
+        double speed = GetTileSpeed(game, controller, floor);
         double current = baseBpm * speed;
 
         lock (_stateLock)
@@ -319,6 +345,7 @@ public sealed class ShowBpmPlugin : IModPlugin, IModSettings
             _kps = (int)Math.Round(current / 60d);
             _hudVisible = true;
         }
+        _speedTextLevelReady = true;
 
         _speedTextDiagnosticLogged = false;
         _speedTextRefreshPending = IsSpeedTextActive;
@@ -355,9 +382,13 @@ public sealed class ShowBpmPlugin : IModPlugin, IModSettings
 
         lock (_stateLock)
         {
-            double speed = game.GetSpeed(controller);
-            double currentBpm = GetRealBpm(game, floor, speed) * _playbackSpeed * _pitch;
-            double nextBpm = GetRealBpm(game, nextFloor, speed) * _playbackSpeed * _pitch;
+            double controllerSpeed = game.GetSpeed(controller);
+            nint tileFloor = game.GetCurrentFloor(controller);
+            if (tileFloor == 0 || tileFloor == floor)
+                tileFloor = nextFloor;
+            double tileSpeed = GetTileSpeed(game, controller, tileFloor);
+            double currentBpm = GetRealBpm(game, floor, controllerSpeed) * _playbackSpeed * _pitch;
+            double nextBpm = GetRealBpm(game, nextFloor, controllerSpeed) * _playbackSpeed * _pitch;
             bool isMultipress = false;
 
             if (IgnoreMultipress)
@@ -366,7 +397,7 @@ public sealed class ShowBpmPlugin : IModPlugin, IModSettings
                     game.GetEntryAngle(floor),
                     game.GetExitAngle(floor),
                     !game.IsCounterClockwise(floor));
-                double conductorBpm = game.GetConductorBpm(game.GetConductor(floor)) * speed;
+                double conductorBpm = game.GetConductorBpm(game.GetConductor(floor)) * controllerSpeed;
                 double time = AngleToTime(angleMoved, conductorBpm);
                 bool appliesDamage = angleMoved > 1.56905098538846d
                     && time > game.GetAverageFrameTime(controller) * 2.5d
@@ -377,12 +408,21 @@ public sealed class ShowBpmPlugin : IModPlugin, IModSettings
             if (isMultipress || _beforeMultipress)
                 currentBpm = _beforeBpm;
 
-            _tileBpm = _baseBpm * speed;
+            double previousTileBpm = _tileBpm;
+            _tileBpm = _baseBpm * tileSpeed;
             _realBpm = currentBpm;
             _kps = (int)Math.Round(currentBpm / 60d);
             _beforeMultipress = isMultipress;
             _beforeBpm = currentBpm;
             _hudVisible = true;
+
+            if (!NearlyEqual(previousTileBpm, _tileBpm))
+            {
+                Logger.Info(
+                    LogTag,
+                    $"Tile BPM updated: floor={Pointer(tileFloor)}, speed={tileSpeed:0.###}, "
+                        + $"tileBpm={_tileBpm:0.###}, controllerSpeed={controllerSpeed:0.###}");
+            }
         }
     }
 
@@ -390,6 +430,7 @@ public sealed class ShowBpmPlugin : IModPlugin, IModSettings
     {
         lock (_stateLock)
             _hudVisible = false;
+        _speedTextLevelReady = false;
     }
 
     // ── 速度倍率文字 ──
@@ -706,7 +747,7 @@ public sealed class ShowBpmPlugin : IModPlugin, IModSettings
     internal void HandleFloorLateUpdate(nint floor)
     {
         GameApi? game = _game;
-        if (game == null || floor == 0)
+        if (game == null || floor == 0 || !_speedTextLevelReady)
             return;
 
         // 自由漫游生成的砖块在非游戏世界下不处理，与 PC 版一致。
@@ -760,7 +801,7 @@ public sealed class ShowBpmPlugin : IModPlugin, IModSettings
     internal void HandleFloorBecameVisible(nint floor)
     {
         GameApi? game = _game;
-        if (game == null || floor == 0)
+        if (game == null || floor == 0 || !_speedTextLevelReady)
             return;
 
         game.SetBehaviourEnabled(floor, true);
@@ -949,6 +990,23 @@ public sealed class ShowBpmPlugin : IModPlugin, IModSettings
             return;
         if (game.GetCurrentFloor(_controller) != 0)
             HandleLevelStart();
+    }
+
+    private static double GetTileSpeed(GameApi game, nint controller, nint floor)
+    {
+        if (floor != 0)
+        {
+            double floorSpeed = game.GetFloorSpeed(floor);
+            if (floorSpeed > 0d && !double.IsNaN(floorSpeed) && !double.IsInfinity(floorSpeed))
+                return floorSpeed;
+        }
+
+        double controllerSpeed = game.GetSpeed(controller);
+        return controllerSpeed > 0d
+            && !double.IsNaN(controllerSpeed)
+            && !double.IsInfinity(controllerSpeed)
+            ? controllerSpeed
+            : 1d;
     }
 
     private double GetRealBpm(GameApi game, nint floor, double speed)
