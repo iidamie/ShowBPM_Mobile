@@ -383,10 +383,11 @@ public sealed class ShowBpmPlugin : IModPlugin, IModSettings
         lock (_stateLock)
         {
             double controllerSpeed = game.GetSpeed(controller);
-            nint tileFloor = game.GetCurrentFloor(controller);
-            if (tileFloor == 0 || tileFloor == floor)
-                tileFloor = nextFloor;
-            double tileSpeed = GetTileSpeed(game, controller, tileFloor);
+            // MoveToNextFloor passes the brick whose speed event has just been
+            // applied. Reading currFloor/nextFloor here lags one brick behind on
+            // the mobile runtime because those pointers are advanced afterwards.
+            nint tileFloor = floor;
+            double tileSpeed = GetTileSpeed(game, controller, floor);
             double currentBpm = GetRealBpm(game, floor, controllerSpeed) * _playbackSpeed * _pitch;
             double nextBpm = GetRealBpm(game, nextFloor, controllerSpeed) * _playbackSpeed * _pitch;
             bool isMultipress = false;
