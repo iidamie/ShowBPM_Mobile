@@ -13,6 +13,7 @@ internal sealed unsafe class GameApi
     private readonly IAppDomain _domain;
     private readonly IRuntimeAssembly _assembly;
     private readonly IRuntimeClass _controllerClass;
+    private readonly IRuntimeClass? _playerClass;
     private readonly IRuntimeClass _floorClass;
     private readonly IRuntimeClass _conductorClass;
     private readonly IRuntimeClass? _adoBaseClass;
@@ -28,6 +29,7 @@ internal sealed unsafe class GameApi
     private readonly IRuntimeClass? _gameObjectClass;
 
     private readonly IRuntimeField? _controllerInstance;
+    private readonly IRuntimeField? _playerCurrentFloor;
     private readonly IRuntimeField? _gameWorld;
     private readonly IRuntimeField? _speed;
     private readonly IRuntimeField? _currentSequenceId;
@@ -69,6 +71,7 @@ internal sealed unsafe class GameApi
     private readonly IRuntimeField? _prefabLetterPress;
 
     private readonly IRuntimeMethod? _getController;
+    private readonly IRuntimeMethod? _getPlayerCurrentFloor;
     private readonly IRuntimeMethod? _getConductor;
     private readonly IRuntimeMethod? _getEditor;
     private readonly IRuntimeMethod? _getCurrentFloor;
@@ -114,6 +117,7 @@ internal sealed unsafe class GameApi
         _domain = domain;
         _assembly = assembly;
         _controllerClass = RequireClass("scrController");
+        _playerClass = FindClass("scrPlayer");
         _floorClass = RequireClass("scrFloor");
         _conductorClass = RequireClass("scrConductor");
         _adoBaseClass = FindClass("ADOBase");
@@ -128,6 +132,7 @@ internal sealed unsafe class GameApi
         _rdConstantsClass = FindClass("RDConstants");
 
         _controllerInstance = FindField(_controllerClass, "_instance", "instance");
+        _playerCurrentFloor = FindField(_playerClass, "currfloor", "currFloor");
         _gameWorld = FindField(_controllerClass, "gameworld", "isGameWorld", "isgameworld", "GameWorld");
         _speed = FindField(_controllerClass, "d_speed", "speed", "_speed", "currentSpeed", "_currentSpeed");
         _currentSequenceId = FindField(_controllerClass, "currentSeqID", "currentSequenceId");
@@ -169,6 +174,7 @@ internal sealed unsafe class GameApi
 
         _getController = _adoBaseClass?.GetMethod("get_controller", 0)
             ?? _controllerClass.GetMethod("get_instance", 0);
+        _getPlayerCurrentFloor = _playerClass?.GetMethod("get_currFloor", 0);
         _getConductor = _adoBaseClass?.GetMethod("get_conductor", 0);
         _getEditor = _adoBaseClass?.GetMethod("get_editor", 0);
         _getCurrentFloor = _controllerClass.GetMethod("get_currFloor", 0);
@@ -248,6 +254,7 @@ internal sealed unsafe class GameApi
             + $"levelMakerClass={Present(_levelMakerClass)}, "
             + $"levelMakerInstance={Present(_getLevelMakerInstance) || Present(_levelMakerInstanceField)}, "
             + $"listFloors={Present(_levelMakerFloors)}, "
+            + $"playerCurrentFloor={Present(_getPlayerCurrentFloor) || Present(_playerCurrentFloor)}, "
             + $"floorSpeed={Present(_floorSpeed)}, prevFloor={Present(_prevFloor)}, "
             + $"editorNumText={Present(_editorNumText)}, letterText={Present(_letterText)}, "
             + $"getGameConstants={Present(_getGameConstants)}, prefabLetterPress={Present(_prefabLetterPress)}, "
@@ -307,6 +314,26 @@ internal sealed unsafe class GameApi
         catch
         {
             return Read(_firstFloor, controller, nint.Zero);
+        }
+    }
+
+    /// <summary>
+    /// 读取 scrPlayer.currfloor。3.3.1 的玩家更新会先推进这个值，
+    /// 而 scrController.currFloor 可能到下一次控制器更新才同步；BPM
+    /// 变化必须以玩家当前砖为准。
+    /// </summary>
+    internal nint GetPlayerCurrentFloor(nint player)
+    {
+        if (player == 0)
+            return 0;
+        try
+        {
+            nint floor = _getPlayerCurrentFloor?.Invoke(player) ?? 0;
+            return floor != 0 ? floor : Read(_playerCurrentFloor, player, nint.Zero);
+        }
+        catch
+        {
+            return Read(_playerCurrentFloor, player, nint.Zero);
         }
     }
 

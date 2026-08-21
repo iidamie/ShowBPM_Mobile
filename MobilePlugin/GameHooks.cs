@@ -18,33 +18,31 @@ public static partial class GameHooks
             Uninstall();
             _plugin = plugin;
 
-            // 逐个安装：生成的 InstallHooks() 是「全有或全无」，任何一个装不上都会让整个 Mod
-            // 加载失败。这里只把 MoveToNextFloor 当作必需项，其余失败仅降级并记录是哪一个。
-            bool core = TryInstall("scrPlanet.MoveToNextFloor", Install_MoveToNextFloor);
-            if (!core)
-            {
-                Logger.Error(LogTag, "Required hook scrPlanet.MoveToNextFloor could not be installed");
-                Uninstall();
-                return false;
-            }
-
             TryInstall("scrController.Awake", Install_ControllerAwake);
             TryInstall("scnGame.Play", Install_GamePlay);
             TryInstall("scrPressToStart.ShowText", Install_ShowText);
-            TryInstall("scrUIController.WipeToBlack", Install_WipeToBlack);
+            // 3.3.1's CR2024 level-select entry/exit path calls this method with
+            // two managed Action callbacks. It is only a HUD cleanup hook, so
+            // leave the original method untouched for the C# manager's IL2CPP
+            // chain; ControllerAwake and StartLoadingScene still reset HUD state.
             TryInstall("scnEditor.ResetScene", Install_EditorReset);
             TryInstall("scrController.StartLoadingScene", Install_StartLoadingScene);
             TryInstall("RDString.ChangeLanguage", Install_ChangeLanguage);
 
-            // 速度倍率文字所需的三个 Hook；缺任何一个都只是该功能降级。
+            // scrPlayer.Update 只在原始玩家更新完成后读取当前砖块，承担游戏世界内的
+            // BPM 轮询；它不参与球的落砖调用链。scrFloor.LateUpdate 只负责倍率文字。
+            bool playerUpdate = TryInstall("scrPlayer.Update", Install_PlayerUpdate);
+
+            // scrFloor.LateUpdate 负责倍率文字刷新。
+            // 不 Hook scrPlanet.MoveToNextFloor：关卡选择也复用该方法，且 YoonKeyViewer
+            // 会对同一目标建立另一层 C# Hook；3.3.1 的球移动必须保持原始调用链。
             bool lateUpdate = TryInstall("scrFloor.LateUpdate", Install_FloorLateUpdate);
-            bool becameVisible = TryInstall("scrFloor.OnBecameVisible", Install_OnBecameVisible);
             bool drawFloorNums = TryInstall("scnEditor.DrawFloorNums", Install_DrawFloorNums);
             SpeedTextTickAvailable = lateUpdate;
             Logger.Info(
                 LogTag,
-                $"Speed text hooks: LateUpdate={lateUpdate}, "
-                    + $"OnBecameVisible={becameVisible}, DrawFloorNums={drawFloorNums}");
+                $"Gameplay tick: scrPlayer.Update={playerUpdate}; speed text hooks: LateUpdate={lateUpdate}, "
+                    + $"DrawFloorNums={drawFloorNums}; native floor visibility path preserved");
 
             Logger.Info(LogTag, $"Installed {_installed} IL2CPP hooks ({_failed} unavailable)");
             return true;
@@ -107,13 +105,6 @@ public static partial class GameHooks
         }
     }
 
-    [UnmanagedHook("Assembly-CSharp.dll", "scrPlanet", "MoveToNextFloor", ParameterCount = 3)]
-    private static void MoveToNextFloor(nint instance, nint floor, float exitAngle, int hitMargin, nint methodInfo)
-    {
-        MoveToNextFloorOriginal(instance, floor, exitAngle, hitMargin, methodInfo);
-        Notify(plugin => plugin.HandleMoveToNextFloor(floor), nameof(MoveToNextFloor));
-    }
-
     [UnmanagedHook("Assembly-CSharp.dll", "scrController", "Awake", ParameterCount = 0)]
     private static void ControllerAwake(nint instance, nint methodInfo)
     {
@@ -136,13 +127,6 @@ public static partial class GameHooks
         Notify(plugin => plugin.HandleLevelStart(), nameof(ShowText));
     }
 
-    [UnmanagedHook("Assembly-CSharp.dll", "scrUIController", "WipeToBlack", ParameterCount = 3)]
-    private static void WipeToBlack(nint instance, int direction, nint onComplete, nint onCancel, nint methodInfo)
-    {
-        WipeToBlackOriginal(instance, direction, onComplete, onCancel, methodInfo);
-        Notify(plugin => plugin.HideHud(), nameof(WipeToBlack));
-    }
-
     [UnmanagedHook("Assembly-CSharp.dll", "scnEditor", "ResetScene", ParameterCount = 1)]
     private static void EditorReset(nint instance, byte clsToEditor, nint methodInfo)
     {
@@ -162,6 +146,13 @@ public static partial class GameHooks
     {
         ChangeLanguageOriginal(language, methodInfo);
         Notify(plugin => plugin.HandleLanguageChanged(language), nameof(ChangeLanguage));
+    }
+
+    [UnmanagedHook("Assembly-CSharp.dll", "scrPlayer", "Update", ParameterCount = 0)]
+    private static void PlayerUpdate(nint instance, nint methodInfo)
+    {
+        PlayerUpdateOriginal(instance, methodInfo);
+        Notify(plugin => plugin.HandleGameplayPlayerTick(instance), nameof(PlayerUpdate));
     }
 
     /// <summary>
@@ -212,24 +203,4 @@ public static partial class GameHooks
         }
     }
 
-    /// <summary>对应 PC 版返回 false 的 Prefix：功能开启时接管砖块可见时的显示逻辑。</summary>
-    [UnmanagedHook("Assembly-CSharp.dll", "scrFloor", "OnBecameVisible", ParameterCount = 0)]
-    private static void OnBecameVisible(nint instance, nint methodInfo)
-    {
-        ShowBpmPlugin? plugin = _plugin;
-        if (plugin == null || !plugin.IsSpeedTextActive)
-        {
-            OnBecameVisibleOriginal(instance, methodInfo);
-            return;
-        }
-
-        try
-        {
-            plugin.HandleFloorBecameVisible(instance);
-        }
-        catch (Exception exception)
-        {
-            Logger.Error(LogTag, $"{nameof(OnBecameVisible)}: {exception}");
-        }
-    }
 }

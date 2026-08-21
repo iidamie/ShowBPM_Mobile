@@ -59,6 +59,7 @@ public sealed class ShowBpmPlugin : IModPlugin, IModSettings
     private bool _speedTextVisibilityDiagnosticLogged;
     private volatile bool _speedTextLevelReady;
     private nint _speedTextFloorList;
+    private nint _lastGameplayFloor;
 
     [ModSettingLabel("Show tile BPM")]
     public bool ShowTileBpm = true;
@@ -183,6 +184,7 @@ public sealed class ShowBpmPlugin : IModPlugin, IModSettings
         _speedTextDrawDiagnosticLogged = false;
         _speedTextVisibilityDiagnosticLogged = false;
         _speedTextLevelReady = false;
+        _lastGameplayFloor = 0;
         Logger.Info(LogTag, "Unloaded");
     }
 
@@ -273,6 +275,7 @@ public sealed class ShowBpmPlugin : IModPlugin, IModSettings
         _speedTextRefreshPending = false;
         _speedTextRetryAttempted = false;
         _speedTextLevelReady = false;
+        _lastGameplayFloor = 0;
     }
 
     internal void HandleLanguageChanged(int language)
@@ -360,7 +363,7 @@ public sealed class ShowBpmPlugin : IModPlugin, IModSettings
         ApplySpeedText(game, baseBpm);
     }
 
-    internal void HandleMoveToNextFloor(nint floor)
+    internal void HandleCurrentFloorChanged(nint floor)
     {
         GameApi? game = _game;
         if (game == null || floor == 0)
@@ -383,9 +386,9 @@ public sealed class ShowBpmPlugin : IModPlugin, IModSettings
         lock (_stateLock)
         {
             double controllerSpeed = game.GetSpeed(controller);
-            // MoveToNextFloor passes the brick whose speed event has just been
-            // applied. Reading currFloor/nextFloor here lags one brick behind on
-            // the mobile runtime because those pointers are advanced afterwards.
+            // floor is scrPlayer.currfloor: the brick whose BPM is active now.
+            // Use its own nextfloor for the interval, matching the other mobile
+            // HUD implementations instead of using the previously visited tile.
             nint tileFloor = floor;
             double tileSpeed = GetTileSpeed(game, controller, floor);
             double currentBpm = GetRealBpm(game, floor, controllerSpeed) * _playbackSpeed * _pitch;
@@ -425,6 +428,59 @@ public sealed class ShowBpmPlugin : IModPlugin, IModSettings
                         + $"tileBpm={_tileBpm:0.###}, controllerSpeed={controllerSpeed:0.###}");
             }
         }
+    }
+
+    /// <summary>
+    /// 通过 scrPlayer.Update 观察实际游戏世界中的当前砖块变化。
+    ///
+    /// 3.3.1 的关卡选择同样使用 scrPlanet.MoveToNextFloor；ShowBPM 不再
+    /// Hook 那个共享入口，避免和其它 Mod 的链式 Hook 改变球的移动逻辑。
+    /// </summary>
+    internal void HandleGameplayPlayerTick(nint player)
+    {
+        GameApi? game = _game;
+        if (game == null)
+            return;
+
+        nint controller = _controller;
+        if (controller == 0 || !game.IsGameWorld(controller))
+        {
+            controller = game.GetController();
+            if (controller != 0)
+                _controller = controller;
+        }
+
+        if (controller == 0 || !game.IsGameWorld(controller))
+        {
+            _lastGameplayFloor = 0;
+            return;
+        }
+
+        // scrController.currFloor is synchronized one update later on 3.3.1.
+        // scrPlayer.currfloor is the same source used by the other mobile HUD
+        // ports and already points at the tile whose BPM is now active.
+        nint currentFloor = game.GetPlayerCurrentFloor(player);
+        if (currentFloor == 0)
+            currentFloor = game.GetCurrentFloor(controller);
+        if (currentFloor == 0)
+            return;
+
+        // A level-select floor can be backed by a controller whose stale state
+        // still looks like a game world. A live conductor is the stronger
+        // signal that this is an actual playable level.
+        if (game.GetConductor(currentFloor) == 0)
+            return;
+
+        if (currentFloor == _lastGameplayFloor)
+            return;
+
+        bool hadPreviousFloor = _lastGameplayFloor != 0;
+        _lastGameplayFloor = currentFloor;
+
+        if (_baseBpm <= 0d || !hadPreviousFloor)
+            HandleLevelStart(currentFloor);
+        else
+            HandleCurrentFloorChanged(currentFloor);
     }
 
     internal void HideHud()
