@@ -24,6 +24,15 @@ dotnet build MobilePlugin/ShowBPM.csproj -c Release
 python3 package_mod.py
 ```
 
+3.3.1 兼容性说明：手机版不再 Hook `scrUIController.WipeToBlack` 或
+`scrPlanet.MoveToNextFloor` 或 `scrFloor.OnBecameVisible`。前者承载 CR2024 的
+托管转场回调，第二个方法还负责启用砖块 Behaviour，后者同时承载关卡选择球的
+移动；这些都不是 BPM 功能必须的 Hook。BPM 改为由 `scrPlayer.Update` 和
+`scrFloor.LateUpdate` 在实际游戏世界内读取砖块变化，避免干预关卡选择的原始调用链。
+
+BPM 读取使用 `scrPlayer.currfloor` 与当前砖块的 `nextfloor.entryTime`，与其它手机版
+HUD 的取值方式一致，避免使用同步滞后的 `scrController.currFloor`。
+
 编译引用来自当前 StArray.ModManager 源码树（见 `References/README.md`），游戏 Hook 由
 `StArray.ModManager.Analyzer` 这个 Source Generator 从 `[UnmanagedHook]` 标注生成。
 最终 Mod 包不会包含这些公共依赖。

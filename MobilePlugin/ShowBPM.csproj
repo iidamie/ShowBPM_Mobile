@@ -4,22 +4,37 @@
     <TargetFramework>net10.0</TargetFramework>
     <AssemblyName>ShowBPM</AssemblyName>
     <RootNamespace>ShowBPM.Mobile</RootNamespace>
-    <Version>1.2.2</Version>
+    <Version>1.2.3</Version>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <Optimize>true</Optimize>
     <DebugType>embedded</DebugType>
     <Deterministic>true</Deterministic>
+    <!-- Build against the C# Mod Manager implementation. Keep the checked-in
+         references as a fallback for a standalone checkout. -->
+    <CSharpManagerRoot>$(MSBuildThisFileDirectory)..\..\StArray.ModManager-csharp</CSharpManagerRoot>
+    <CSharpManagerAssembly>$(CSharpManagerRoot)\artifacts\StArray.ModManager.dll</CSharpManagerAssembly>
+    <CSharpManagerAnalyzer>$(CSharpManagerRoot)\StArray.ModManager.Analyzer\bin\Release\netstandard2.0\StArray.ModManager.Analyzer.dll</CSharpManagerAnalyzer>
+    <CSharpImGuiAssembly>$(CSharpManagerRoot)\artifacts\ImGui.NET.dll</CSharpImGuiAssembly>
   </PropertyGroup>
 
   <ItemGroup>
-    <Analyzer Include="..\References\StArray.ModManager.Analyzer.dll" />
-    <Reference Include="StArray.ModManager">
+    <Analyzer Include="$(CSharpManagerAnalyzer)" Condition="Exists('$(CSharpManagerAnalyzer)')" />
+    <Analyzer Include="..\References\StArray.ModManager.Analyzer.dll" Condition="!Exists('$(CSharpManagerAnalyzer)')" />
+    <Reference Include="StArray.ModManager" Condition="Exists('$(CSharpManagerAssembly)')">
+      <HintPath>$(CSharpManagerAssembly)</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="StArray.ModManager" Condition="!Exists('$(CSharpManagerAssembly)')">
       <HintPath>..\References\StArray.ModManager.dll</HintPath>
       <Private>false</Private>
     </Reference>
-    <Reference Include="ImGui.NET">
+    <Reference Include="ImGui.NET" Condition="Exists('$(CSharpImGuiAssembly)')">
+      <HintPath>$(CSharpImGuiAssembly)</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="ImGui.NET" Condition="!Exists('$(CSharpImGuiAssembly)')">
       <HintPath>..\References\ImGui.NET.dll</HintPath>
       <Private>false</Private>
     </Reference>
